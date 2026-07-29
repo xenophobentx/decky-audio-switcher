@@ -1,6 +1,6 @@
 {
   "name": "decky-audio-switcher",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Decky plugin that switches audio outputs automatically based on a priority list, with manual override",
   "type": "module",
   "scripts": {
