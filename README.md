@@ -22,6 +22,23 @@ Under the hood the plugin talks to PipeWire through `pactl`
 (`pactl subscribe` for device events, `pactl set-default-sink` for switching,
 plus moving live streams with `pactl move-sink-input`).
 
+## Download
+
+A ready-to-install zip is committed in this repository:
+[`audio-output-switcher.zip`](https://github.com/xenophobentx/decky-audio-switcher/raw/main/audio-output-switcher.zip).
+Install it via Decky Loader's **Install plugin from ZIP** (requires developer
+mode, see below).
+
+## Compatibility
+
+Works on SteamOS (Steam Deck) and on Bazzite's game mode. The plugin does not
+hardcode the `deck` user or uid 1000: it resolves the session user through
+Decky's `DECKY_USER` and talks to that user's PipeWire instance via `pactl`,
+which both distributions ship. On Bazzite, optional virtual sinks
+(Game/Voice/Browser/Music) show up as always-connected devices; since newly
+seen devices are appended to the bottom of the priority list, they never
+steal audio unless you move them up on purpose.
+
 ## Building
 
 Requirements: Node.js 16.14+ and [pnpm](https://pnpm.io/).

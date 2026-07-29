@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import pwd
+import shutil
 
 import decky
 
@@ -106,17 +107,22 @@ class Plugin:
 
     def _build_env(self):
         env = dict(os.environ)
+        # Always point at the session user's runtime dir. The backend may
+        # inherit a root environment (XDG_RUNTIME_DIR=/run/user/0), in which
+        # case pactl would not find the user's PipeWire instance. DECKY_USER
+        # is the real session user on both SteamOS ("deck") and Bazzite.
         try:
             uid = pwd.getpwnam(decky.DECKY_USER).pw_uid
         except KeyError:
             uid = 1000
-        env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{uid}")
+        env["XDG_RUNTIME_DIR"] = f"/run/user/{uid}"
         env.setdefault("HOME", decky.DECKY_USER_HOME)
         return env
 
     async def _pactl(self, *args):
+        pactl = shutil.which("pactl") or "/usr/bin/pactl"
         proc = await asyncio.create_subprocess_exec(
-            "pactl", *args,
+            pactl, *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=self.pactl_env,
