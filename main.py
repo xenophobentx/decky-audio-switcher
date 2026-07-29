@@ -18,12 +18,52 @@ DEFAULT_SETTINGS = {
 }
 
 
+# Virtual sinks created by game-streaming hosts (Sunshine creates
+# sink-sunshine-stereo/-surround51/-surround71 and sets one of them default
+# while a stream runs). These sinks are ephemeral and must stay the default
+# output for the duration of the stream.
+STREAMING_SINK_PATTERNS = ("sink-sunshine", "sunshine", "steam_streaming",
+                           "steam streaming", "streaming speaker", "remote play")
+
+# application.name values of clients that record a sink monitor while game
+# streaming (Steam Remote Play hosting creates no sink; Steam records the
+# monitor of the current default sink instead).
+STREAMING_CAPTURE_APPS = ("steam", "sunshine", "remote play", "remoteplay", "moonlight")
+
+
 def choose_sink(priority, connected):
     """Return the highest-priority sink name that is currently connected."""
     for name in priority:
         if name in connected:
             return name
     return None
+
+
+def is_streaming_sink(name, description):
+    """True if a sink looks like a game-streaming virtual device."""
+    haystack = "{} {}".format(name or "", description or "").lower()
+    return any(pattern in haystack for pattern in STREAMING_SINK_PATTERNS)
+
+
+def find_streaming_capture(source_outputs, sources):
+    """True if a streaming client records a sink monitor (Remote Play hosting).
+
+    Only monitor captures by known streaming apps count: SteamOS keeps a
+    permanent echo-cancel monitor capture, so "any monitor capture" would be
+    far too broad.
+    """
+    monitor_indices = set()
+    for src in sources or []:
+        if str(src.get("name", "")).endswith(".monitor"):
+            monitor_indices.add(str(src.get("index")))
+    for out in source_outputs or []:
+        if str(out.get("source")) not in monitor_indices:
+            continue
+        props = out.get("properties") or {}
+        app = str(props.get("application.name", "")).lower()
+        if any(pattern in app for pattern in STREAMING_CAPTURE_APPS):
+            return True
+    return False
 
 
 def load_settings():
@@ -160,6 +200,22 @@ class Plugin:
         default = (await self._pactl("get-default-sink") or "").strip() or None
         return sinks, default
 
+    async def _get_streaming_capture(self):
+        """Best effort: True if a streaming client is recording a sink monitor.
+
+        If pactl has no JSON support or the output cannot be parsed, report no
+        capture — the sink-based streaming protection still works.
+        """
+        out_outputs = await self._pactl("-f", "json", "list", "source-outputs")
+        out_sources = await self._pactl("-f", "json", "list", "sources")
+        if out_outputs is None or out_sources is None:
+            return False
+        try:
+            return find_streaming_capture(json.loads(out_outputs),
+                                          json.loads(out_sources))
+        except ValueError:
+            return False
+
     async def _set_default_sink(self, name: str):
         result = await self._pactl("set-default-sink", name)
         if result is None:
@@ -178,9 +234,22 @@ class Plugin:
 
     async def _apply_policy(self, trigger_switch: bool):
         sinks, default = await self._get_sinks()
-        connected = {s["name"] for s in sinks}
+        connected = set()
+        streaming_sink = None
         changed = False
         for sink in sinks:
+            if is_streaming_sink(sink["name"], sink["description"]):
+                # Streaming sinks are ephemeral: never remember them in the
+                # priority list (and drop them if an older version did).
+                if streaming_sink is None:
+                    streaming_sink = sink["name"]
+                if sink["name"] in self.settings["priority"]:
+                    self.settings["priority"].remove(sink["name"])
+                    changed = True
+                if self.settings["device_names"].pop(sink["name"], None) is not None:
+                    changed = True
+                continue
+            connected.add(sink["name"])
             if sink["name"] not in self.settings["priority"]:
                 # Unknown devices go to the bottom so they never cause a
                 # surprise switch; the user can move them up afterwards.
@@ -191,26 +260,47 @@ class Plugin:
                 changed = True
         if changed:
             save_settings(self.settings)
-        if trigger_switch and self.settings["auto_switch"]:
-            target = choose_sink(self.settings["priority"], connected)
-            if target and target != default:
-                decky.logger.info("Auto-switching default sink to %s", target)
-                await self._set_default_sink(target)
+        if not trigger_switch:
+            return
+        if streaming_sink is not None:
+            # A game stream is being hosted through a virtual sink (Sunshine):
+            # keep it the default so the remote client does not lose audio.
+            if streaming_sink != default:
+                decky.logger.info(
+                    "Streaming sink %s active, locking default output to it",
+                    streaming_sink)
+                await self._set_default_sink(streaming_sink)
+            return
+        if not self.settings["auto_switch"]:
+            return
+        if await self._get_streaming_capture():
+            # Steam Remote Play hosting records the monitor of the current
+            # default sink; switching away would cut the remote client's
+            # audio, so suspend auto-switching while the capture is active.
+            decky.logger.info(
+                "Streaming capture active, auto-switching suspended")
+            return
+        target = choose_sink(self.settings["priority"], connected)
+        if target and target != default:
+            decky.logger.info("Auto-switching default sink to %s", target)
+            await self._set_default_sink(target)
 
     async def _build_state(self):
         sinks, default = await self._get_sinks()
         connected = {s["name"]: s for s in sinks}
         entries = []
         for name in self.settings["priority"]:
+            description = connected.get(name, {}).get(
+                "description", self.settings["device_names"].get(name, name))
             entries.append({
                 "name": name,
-                "description": connected.get(name, {}).get(
-                    "description", self.settings["device_names"].get(name, name)),
+                "description": description,
                 "connected": name in connected,
                 "is_default": name == default,
+                "is_streaming": is_streaming_sink(name, description),
             })
-        # Sinks that somehow aren't in the priority list yet (first
-        # enumeration after boot) are still shown.
+        # Sinks that aren't in the priority list (first enumeration after
+        # boot, or ephemeral streaming sinks) are still shown.
         for name, sink in connected.items():
             if name not in self.settings["priority"]:
                 entries.append({
@@ -218,11 +308,23 @@ class Plugin:
                     "description": sink["description"],
                     "connected": True,
                     "is_default": name == default,
+                    "is_streaming": is_streaming_sink(name, sink["description"]),
                 })
+        streaming_sink = next(
+            (s for s in sinks
+             if is_streaming_sink(s["name"], s["description"])), None)
+        if streaming_sink is not None:
+            streaming = {"active": True, "mode": "sink",
+                         "sink": streaming_sink["name"]}
+        elif await self._get_streaming_capture():
+            streaming = {"active": True, "mode": "capture", "sink": None}
+        else:
+            streaming = {"active": False, "mode": None, "sink": None}
         return {
             "sinks": entries,
             "priority": list(self.settings["priority"]),
             "auto_switch": self.settings["auto_switch"],
+            "streaming": streaming,
         }
 
     # ---------- device monitoring ----------
@@ -265,6 +367,10 @@ class Plugin:
                 return
             line = line_bytes.decode(errors="replace")
             if "on sink" in line and ("'new'" in line or "'remove'" in line):
+                pending_topology = True
+            elif "on source-output" in line and ("'new'" in line or "'remove'" in line):
+                # Remote Play hosting starts/stops a monitor capture without
+                # any sink change; re-evaluate so the pause takes effect.
                 pending_topology = True
             elif "on server" in line:
                 # Fires when the default sink changes (e.g. via Steam UI).

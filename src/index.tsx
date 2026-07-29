@@ -13,19 +13,33 @@ import {
   definePlugin,
 } from "@decky/api";
 import { useEffect, useState } from "react";
-import { FaArrowDown, FaArrowUp, FaTimes, FaVolumeUp } from "react-icons/fa";
+import {
+  FaArrowDown,
+  FaArrowUp,
+  FaBroadcastTower,
+  FaTimes,
+  FaVolumeUp,
+} from "react-icons/fa";
 
 interface SinkEntry {
   name: string;
   description: string;
   connected: boolean;
   is_default: boolean;
+  is_streaming?: boolean;
+}
+
+interface StreamingState {
+  active: boolean;
+  mode: "sink" | "capture" | null;
+  sink: string | null;
 }
 
 interface AudioState {
   sinks: SinkEntry[];
   priority: string[];
   auto_switch: boolean;
+  streaming?: StreamingState;
 }
 
 const getState = callable<[], AudioState>("get_state");
@@ -78,10 +92,28 @@ function Content() {
   const orderedKnown = state.priority
     .map((name) => state.sinks.find((s) => s.name === name))
     .filter((s): s is SinkEntry => s !== undefined);
+  const streaming = state.streaming;
+  const streamingSinkDescription =
+    streaming?.sink != null
+      ? state.sinks.find((s) => s.name === streaming.sink)?.description ??
+        streaming.sink
+      : undefined;
 
   return (
     <>
       <PanelSection title="Output">
+        {streaming?.active && (
+          <PanelSectionRow>
+            <Field
+              icon={<FaBroadcastTower />}
+              label={
+                streaming.mode === "sink"
+                  ? `Streaming active — output locked to ${streamingSinkDescription}`
+                  : "Streaming active — automatic switching paused"
+              }
+            />
+          </PanelSectionRow>
+        )}
         <PanelSectionRow>
           <DropdownItem
             label="Current output"
