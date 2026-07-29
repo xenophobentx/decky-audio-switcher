@@ -1,0 +1,11 @@
+{
+  "name": "Audio Output Switcher",
+  "author": "xenophobentx",
+  "flags": [],
+  "api_version": 1,
+  "publish": {
+    "tags": ["audio", "utility"],
+    "description": "Automatically switches between audio outputs based on a priority list, with manual override.",
+    "image": "https://opengraph.githubassets.com/1/xenophobentx/decky-audio-switcher"
+  }
+}
