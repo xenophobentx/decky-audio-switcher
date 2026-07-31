@@ -115,7 +115,11 @@ function Content() {
           </PanelSectionRow>
         )}
         <PanelSectionRow>
+          {/* DropdownItem keeps its displayed selection in internal state and
+              ignores later selectedOption changes; remount it whenever the
+              default sink changes so the label stays correct. */}
           <DropdownItem
+            key={currentDefault ?? "no-default"}
             label="Current output"
             rgOptions={connectedSinks.map((s) => ({
               data: s.name,

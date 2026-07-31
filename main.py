@@ -116,17 +116,18 @@ class Plugin:
 
     async def set_default_sink(self, name: str):
         """Manual switch. Stays in effect until the device topology changes."""
-        await self._set_default_sink(name)
-        return await self._build_state()
+        ok = await self._set_default_sink(name)
+        return await self._build_state(assume_default=name if ok else None)
 
     async def set_auto_switch(self, enabled: bool):
         self.settings["auto_switch"] = bool(enabled)
         save_settings(self.settings)
-        await self._apply_policy(trigger_switch=True)
-        return await self._build_state()
+        switched = await self._apply_policy(trigger_switch=True)
+        return await self._build_state(assume_default=switched)
 
     async def move_priority(self, name: str, direction: str):
         priority = self.settings["priority"]
+        switched = None
         if name in priority:
             idx = priority.index(name)
             new_idx = idx - 1 if direction == "up" else idx + 1
@@ -134,8 +135,8 @@ class Plugin:
                 priority[idx], priority[new_idx] = priority[new_idx], priority[idx]
                 save_settings(self.settings)
                 # A reorder is an explicit user action, apply it right away.
-                await self._apply_policy(trigger_switch=True)
-        return await self._build_state()
+                switched = await self._apply_policy(trigger_switch=True)
+        return await self._build_state(assume_default=switched)
 
     async def forget_device(self, name: str):
         self.settings["priority"] = [n for n in self.settings["priority"] if n != name]
@@ -233,6 +234,14 @@ class Plugin:
     # ---------- policy ----------
 
     async def _apply_policy(self, trigger_switch: bool):
+        """Refresh device bookkeeping and switch the default sink if needed.
+
+        Returns the sink name that was switched to, or None. WirePlumber
+        applies a default change asynchronously, so right after a switch
+        `pactl get-default-sink` may still report the old sink — callers
+        pass the returned name to _build_state(assume_default=...) so the
+        UI reflects the switch immediately.
+        """
         sinks, default = await self._get_sinks()
         connected = set()
         streaming_sink = None
@@ -261,7 +270,7 @@ class Plugin:
         if changed:
             save_settings(self.settings)
         if not trigger_switch:
-            return
+            return None
         if streaming_sink is not None:
             # A game stream is being hosted through a virtual sink (Sunshine):
             # keep it the default so the remote client does not lose audio.
@@ -269,24 +278,30 @@ class Plugin:
                 decky.logger.info(
                     "Streaming sink %s active, locking default output to it",
                     streaming_sink)
-                await self._set_default_sink(streaming_sink)
-            return
+                if await self._set_default_sink(streaming_sink):
+                    return streaming_sink
+            return None
         if not self.settings["auto_switch"]:
-            return
+            return None
         if await self._get_streaming_capture():
             # Steam Remote Play hosting records the monitor of the current
             # default sink; switching away would cut the remote client's
             # audio, so suspend auto-switching while the capture is active.
             decky.logger.info(
                 "Streaming capture active, auto-switching suspended")
-            return
+            return None
         target = choose_sink(self.settings["priority"], connected)
         if target and target != default:
             decky.logger.info("Auto-switching default sink to %s", target)
-            await self._set_default_sink(target)
+            if await self._set_default_sink(target):
+                return target
+        return None
 
-    async def _build_state(self):
+    async def _build_state(self, assume_default=None):
         sinks, default = await self._get_sinks()
+        if assume_default is not None:
+            # Right after a switch get-default-sink may still be stale.
+            default = assume_default
         connected = {s["name"]: s for s in sinks}
         entries = []
         for name in self.settings["priority"]:
