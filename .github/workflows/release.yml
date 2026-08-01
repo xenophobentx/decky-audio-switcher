@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Tag to create the release for (e.g. v1.0.0)"
+        required: true
 
 permissions:
   contents: write
@@ -15,6 +20,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: softprops/action-gh-release@v2
         with:
-          name: ${{ github.ref_name }}
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
+          name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
           files: audio-output-switcher.zip
           generate_release_notes: true
