@@ -25,8 +25,9 @@ plus moving live streams with `pactl move-sink-input`).
 
 ## Download
 
-A ready-to-install zip is committed in this repository:
-[`audio-output-switcher.zip`](https://github.com/xenophobentx/decky-audio-switcher/raw/main/audio-output-switcher.zip).
+Grab the ready-to-install zip from the latest release:
+[`audio-output-switcher.zip`](https://github.com/xenophobentx/decky-audio-switcher/releases/latest/download/audio-output-switcher.zip)
+(all versions on the [releases page](https://github.com/xenophobentx/decky-audio-switcher/releases)).
 Install it via Decky Loader's **Install plugin from ZIP** (requires developer
 mode, see below).
 
